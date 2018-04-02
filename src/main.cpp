@@ -64,6 +64,17 @@ int main(int argc, char** args) {
 			break;
 		}
 
+		// Checking input from the server?
+		// Listening to its UDPsocket
+		// Reading in the information, interpreting it, 
+		// applying it to its own model on this specific client. 
+		// Recv();
+		// packet->data();
+		// if (data[0] == POSITION_UPDATE) 
+		// apply the new position right away OR check if the new position
+		// is close enough to make an immediate update. 
+		// If its too far away that might look choppy, and we might need to interpolate.  
+
 		// Manipulate our model
 		
 
