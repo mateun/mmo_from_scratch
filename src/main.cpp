@@ -4,36 +4,40 @@
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_net.h>
 
+#define MSG_TYPE_GAMESTATE_UPDATE 8
+
 bool game_running = true;
 
-int main(int argc, char** args) {
-
+bool initSDL() {
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) {
 		printf("error while initializing SDL: %s\n", SDL_GetError());
-		return 1;
+		return false;
 	}
-
-	Uint64 ticks_per_second = SDL_GetPerformanceFrequency();
-	printf("ticks per second: %llu\n", ticks_per_second);
-
-	SDL_Window* window;
-	SDL_Renderer* renderer;
 
 	// TTF stuff
 	if (TTF_Init() < 0) {
 		printf("error while initializing SDL_TTF: %s\n", TTF_GetError());
-		return 1;
-	}
-
-	TTF_Font* font_default = TTF_OpenFont("D:/Projects/C++/mmo_game/build/data-latin.ttf", 50);
-	if (!font_default) {
-		printf("error while loading font: %s\n", TTF_GetError());
-		return 1;
+		return false;
 	}
 
 	// NET stuff
 	if (SDLNet_Init() < 0) {
 		SDL_Log("error while initializing SDLNet %s", SDLNet_GetError());
+		return false;
+	}	
+
+}
+
+int main(int argc, char** args) {
+	Uint64 ticks_per_second = SDL_GetPerformanceFrequency();
+	initSDL();
+
+	SDL_Window* window;
+	SDL_Renderer* renderer;
+
+	TTF_Font* font_default = TTF_OpenFont("D:/Projects/C++/mmo_game/build/data-latin.ttf", 50);
+	if (!font_default) {
+		printf("error while loading font: %s\n", TTF_GetError());
 		return 1;
 	}
 
@@ -43,7 +47,6 @@ int main(int argc, char** args) {
 		SDL_Log("error while creating our outgoing package: %s", SDLNet_GetError());
 		return 1;
 	}
-
 
 	if (SDL_CreateWindowAndRenderer(800, 600, SDL_WINDOW_RESIZABLE, 
 													&window, &renderer)) {
@@ -68,7 +71,6 @@ int main(int argc, char** args) {
 	unsigned int frame_time_micro_secs = 0;
 	float millis = 0;
 
-
 	// "Connect" (send a packet) to the server to ask for initial data
 	// Send a "magic" byte package to the server
 	// Wait for the answer and store the initial information
@@ -85,7 +87,7 @@ int main(int argc, char** args) {
 
 	// Now, next we wait for an answer
 	UDPpacket* packet_in = SDLNet_AllocPacket(50);
-	SDL_Delay(7000);
+	SDL_Delay(2500);
 	int recv_ok = SDLNet_UDP_Recv(client_socket, packet_in);
 	if (recv_ok) {
 		Uint8* initial_data = packet_in->data;
@@ -100,7 +102,18 @@ int main(int argc, char** args) {
 		SDL_Log("nothing received from the server!");
 	}
 	
+	// Client sprite rendering stuff
+	SDL_Surface* surf = SDL_LoadBMP("d:/Projects/C++/mmo_game/build/local_player.bmp");
+	if (!surf) {
+		SDL_Log("no surface! error! %s", SDL_GetError());
+	}
+	SDL_Texture* local_player_texture = SDL_CreateTextureFromSurface(renderer, surf);
+	SDL_FreeSurface(surf);
 
+	// Local player position
+	float local_pos_x;
+	float local_pos_y;
+	
 	// Frame loop
 	while (game_running) {
 
@@ -110,9 +123,38 @@ int main(int argc, char** args) {
 		// Checking the inputs
 		SDL_PollEvent(&event);
 		if (event.type == SDL_QUIT) {
-			break;
+			break; } // Grabing local keyboard input
+		// Manipulate our model based
+		const Uint8* kb_state = SDL_GetKeyboardState(NULL); 
+		Uint8 input_data[5];
+		input_data[0] = 8; // message type = INPUT_MSG
+		input_data[1] = 0; // forward key state
+		input_data[2] = 0; // backward key state
+		input_data[3] = 0; // right key state
+		input_data[4] = 0; // left key state
+
+		if (kb_state[SDL_SCANCODE_W]) {
+			//local_pos_y -= 0.01f;	
+			input_data[1] = 1;
+		}
+		if (kb_state[SDL_SCANCODE_S]) {
+			//local_pos_y += 0.01f;	
+			input_data[2] = 1;
+		} 
+		if (kb_state[SDL_SCANCODE_D]) {
+			//local_pos_x += 0.01f;	
+			input_data[3] = 1;
+		}
+		if (kb_state[SDL_SCANCODE_A]) {
+			//local_pos_x -= 0.01f;	
+			input_data[4] = 1;
 		}
 
+		// Send the input data to the server
+		packet_out->data = input_data; 
+		packet_out->len = 5;
+		SDLNet_UDP_Send(client_socket, -1, packet_out);	
+		
 		// Checking input from the server?
 		// Listening to its UDPsocket
 		// Reading in the information, interpreting it, 
@@ -123,19 +165,22 @@ int main(int argc, char** args) {
 		// apply the new position right away OR check if the new position
 		// is close enough to make an immediate update. 
 		// If its too far away that might look choppy, and we might need to interpolate.  
-
-		// Manipulate our model
-		
+		int recv_ok = SDLNet_UDP_Recv(client_socket, packet_in);
+		if (recv_ok) {
+				Uint8* game_state = packet_in->data;
+				Uint8 message_type = game_state[0];
+				if (message_type == MSG_TYPE_GAMESTATE_UPDATE) {
+					local_pos_x = game_state[1];
+				}
+				SDL_Log("x_coord_local_player updated: %f", local_pos_x);
+		} else {
+			//SDL_Log("nothing received from the server!");
+		}
 
 		// Render our world (all our models; the complete state of the game)
 		SDL_SetRenderDrawColor(renderer, 0x20, 0x20, 0x20, 0x00);
 		SDL_RenderClear(renderer);
-		SDL_Rect rect_target;
-		rect_target.x = 5;
-		rect_target.y = 5;
-		rect_target.w = 150;
-		rect_target.h = 40;
-
+		
 		millis = (float)frame_time_micro_secs/(float)1000;
 
 		sprintf(frame_time_text_buffer,  "FrameTime: %f (ms)", millis);
@@ -146,8 +191,21 @@ int main(int argc, char** args) {
 		}
 		SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
 		SDL_FreeSurface(text_surface);
-		
+		SDL_Rect rect_target_local_player;	
+		rect_target_local_player.x = 380 + local_pos_x;
+		rect_target_local_player.y = 280 + local_pos_y;
+		rect_target_local_player.w = 64;
+		rect_target_local_player.h = 64;
+
+		SDL_RenderCopy(renderer, local_player_texture, NULL, &rect_target_local_player);
+		// Render our frametime
+		SDL_Rect rect_target;
+		rect_target.x = 5;
+		rect_target.y = 5;
+		rect_target.w = 150;
+		rect_target.h = 40;
 		SDL_RenderCopy(renderer, text_texture, NULL, &rect_target);
+
 		SDL_RenderPresent(renderer);
 		SDL_DestroyTexture(text_texture);
 	
