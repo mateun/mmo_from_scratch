@@ -4,7 +4,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_net.h>
 
-#define MSG_TYPE_GAMESTATE_UPDATE 8
+#define MSG_TYPE_GAMESTATE_UPDATE 9
 
 bool game_running = true;
 
@@ -107,13 +107,15 @@ int main(int argc, char** args) {
 	if (!surf) {
 		SDL_Log("no surface! error! %s", SDL_GetError());
 	}
+	SDL_SetColorKey(surf, SDL_TRUE, 0);
 	SDL_Texture* local_player_texture = SDL_CreateTextureFromSurface(renderer, surf);
 	SDL_FreeSurface(surf);
 
 	// Local player position
 	float local_pos_x;
 	float local_pos_y;
-	
+
+	Uint32 last_message_update = 0;	
 	// Frame loop
 	while (game_running) {
 
@@ -151,9 +153,22 @@ int main(int argc, char** args) {
 		}
 
 		// Send the input data to the server
-		packet_out->data = input_data; 
-		packet_out->len = 5;
-		SDLNet_UDP_Send(client_socket, -1, packet_out);	
+		// Only ten times per second for now.
+		// todo(rongo): compress the information
+		// that we gathered in the last 100ms
+		// into the packets sent to the server
+		Uint32 current_ticks = SDL_GetTicks();
+		if (current_ticks - last_message_update > 50) {
+			// todo(rongo): we should be able to use that function from the client as well,
+			// because we are doing UDP, so that should not make a difference
+			//send_data_to_client(packet_in->address, client_socket, game_data, 9);
+			packet_out->data = input_data; 
+			packet_out->len = 5;
+			SDLNet_UDP_Send(client_socket, -1, packet_out);
+			last_message_update = current_ticks;
+		}
+								
+			
 		
 		// Checking input from the server?
 		// Listening to its UDPsocket
@@ -167,15 +182,27 @@ int main(int argc, char** args) {
 		// If its too far away that might look choppy, and we might need to interpolate.  
 		int recv_ok = SDLNet_UDP_Recv(client_socket, packet_in);
 		if (recv_ok) {
+				// Reading out the information for the local player
 				Uint8* game_state = packet_in->data;
 				Uint8 message_type = game_state[0];
 				if (message_type == MSG_TYPE_GAMESTATE_UPDATE) {
-					local_pos_x = game_state[1];
+					local_pos_x = SDLNet_Read32(&game_state[1]); 
+					local_pos_y = SDLNet_Read32(&game_state[5]);
 				}
-				SDL_Log("x_coord_local_player updated: %f", local_pos_x);
+				SDL_Log("x_coord_local_player updated: %f/%f", local_pos_x, local_pos_y);
+
+				// Read out the information for all "other" players
+				int number_of_other_players = game_state[9];	
+				SDL_Log("number_of_other_players: %d", number_of_other_players);
+				for (int i=0;i<number_of_other_players;i++) {
+					Uint32 other_x = SDLNet_Read32(&game_state[10 + (i*8)]);
+					Uint32 other_y = SDLNet_Read32(&game_state[14 + (i*8)]);
+					SDL_Log("other player number: %d other_x: %u other_y: %u", i, other_x, other_y);
+				}
 		} else {
 			//SDL_Log("nothing received from the server!");
 		}
+		
 
 		// Render our world (all our models; the complete state of the game)
 		SDL_SetRenderDrawColor(renderer, 0x20, 0x20, 0x20, 0x00);
@@ -192,8 +219,8 @@ int main(int argc, char** args) {
 		SDL_Texture* text_texture = SDL_CreateTextureFromSurface(renderer, text_surface);
 		SDL_FreeSurface(text_surface);
 		SDL_Rect rect_target_local_player;	
-		rect_target_local_player.x = 380 + local_pos_x;
-		rect_target_local_player.y = 280 + local_pos_y;
+		rect_target_local_player.x = local_pos_x;
+		rect_target_local_player.y = local_pos_y;
 		rect_target_local_player.w = 64;
 		rect_target_local_player.h = 64;
 

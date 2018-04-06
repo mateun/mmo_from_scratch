@@ -27,7 +27,7 @@ Player* login_player(UDPpacket* packet) {
 }
 
 // This procedure should is part of the "network" layer. 
-void send_data_to_client(IPaddress client_address, UDPsocket server_socket, Uint8* data) {
+void send_data_to_client(IPaddress client_address, UDPsocket server_socket, Uint8* data, int data_len) {
 	SDL_Log("in send_initial_data_to_client");
 	UDPpacket* out_packet = SDLNet_AllocPacket(50);
 	//Uint8 data_out[50];
@@ -46,7 +46,7 @@ void send_data_to_client(IPaddress client_address, UDPsocket server_socket, Uint
 	//data_out[5] = 135;
 	//data_out[6] = 155;
 	out_packet->data = data;
-	out_packet->len = 7;
+	out_packet->len = data_len;
 	out_packet->address = client_address;
 	SDL_Log("we just waited for 5 seconds, now sending the package to the client really");
 	SDLNet_UDP_Send(server_socket, -1, out_packet);
@@ -95,8 +95,20 @@ int main(int argc, char** args) {
 	int recv_ok = 0;
 	SDL_Log("number of players connected: %d", players_map.size());
 	SDL_Log("server game is wating for packets...");
+
+	Uint32 last_message_update = 0;
+
+	// This just compensates for the 
+	// lower input update frequency
+	// from the client that we are 
+	// running now (due to the fact 
+	// we otherwise kill the live-stream :) )
+	float movement_factor = 75.0f;
+
 	while (true) {
 		recv_ok = SDLNet_UDP_Recv(server_socket, packet_in);
+		// would need to send something even if we are not receiving 
+		// information from a client (e.g. input information).
 		if (recv_ok) {
 			//SDL_Log("the game server received a packet");
 			Uint8* data_in = packet_in->data;
@@ -129,11 +141,11 @@ int main(int argc, char** args) {
 								initial_game_data[0] = player->pos_x;
 								initial_game_data[1] = player->pos_y;
 								initial_game_data[2] = players_map.size();
-								send_data_to_client(packet_in->address, server_socket, initial_game_data);
+								send_data_to_client(packet_in->address, server_socket, initial_game_data, 3);
 								break;
 								}
 				case 8: {
-												SDL_Log("input message"); 
+								SDL_Log("input message"); 
 								std::string unique_player_network_key = get_player_key_by_ip_address(packet_in->address);
 								Player* player = players_map[unique_player_network_key];
 								//SDL_Log("nr. of players: %d. player->pos_x: %d", players_map.size(), player->pos_x);
@@ -143,16 +155,37 @@ int main(int argc, char** args) {
 								Uint8 bwd = packet_in->data[2];
 								Uint8 right = packet_in->data[3];
 								Uint8 left = packet_in->data[4];
-								if (fwd) player->pos_y -= 0.01f;
-								if (bwd) player->pos_y += 0.01f;
-								if (right) player->pos_x += 0.01f;
-								if (left) player->pos_x -= 0.01f;
-								SDL_Log("player pos_x: %d pos_y: %d", player->pos_x, player->pos_y);
+
+								if (fwd) player->pos_y -= 0.01f * movement_factor;
+								if (bwd) player->pos_y += 0.01f * movement_factor;
+								if (right) player->pos_x += 0.01f * movement_factor;
+								if (left) player->pos_x -= 0.01f * movement_factor;
+								
+								SDL_Log("player pos_x: %f pos_y: %f", player->pos_x, player->pos_y);
 								Uint8 game_data[3];
 								game_data[0] = 9;
-								game_data[1] = player->pos_x;
-								game_data[2] = player->pos_y;
-								send_data_to_client(packet_in->address, server_socket, game_data);
+								SDLNet_Write32(player->pos_x, &game_data[1]);
+								SDLNet_Write32(player->pos_y, &game_data[5]);
+								game_data[9] = players_map.size()-1;
+								int remote_player_offset = 0;
+								for (std::pair<std::string, Player*> element : players_map) {
+									SDL_Log("map element: key: %s pos_x: %f id%d", element.first.c_str(), 0, 0);
+									if (element.first == unique_player_network_key) continue;
+									else {
+										Player* remote_player = (Player*) element.second;
+										SDLNet_Write32(remote_player->pos_x, &game_data[10 + (4 * remote_player_offset)]);
+										SDLNet_Write32(remote_player->pos_y, &game_data[14 + (4 * remote_player_offset)]);
+										remote_player_offset++;
+										SDL_Log("player_offset: %d pos_x: %f", remote_player_offset, remote_player->pos_x);
+									}
+								}
+								
+								int len_calculated = 10 + (8 * (players_map.size()-1));
+								Uint32 current_ticks = SDL_GetTicks();
+								if (current_ticks - last_message_update > 100) {
+									send_data_to_client(packet_in->address, server_socket, game_data, len_calculated);
+									last_message_update = current_ticks;
+								}
 								break;
 								}
 			}
